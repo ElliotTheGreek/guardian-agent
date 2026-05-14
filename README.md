@@ -97,9 +97,9 @@ If you want any of the above, the upstream project — [FlowDot](https://flowdot
 
 `guardian-agent` exists to make three things possible that are currently impossible without rebuilding from scratch:
 
-1. **A shared spec for what "supervisor layer" means.** Right now every closed product claims it has one. There's no way to compare them, no way to evaluate them, no way for a regulator to point at "the standard."
+1. **A shared spec for what "supervisor layer" means.** Right now every closed product claims it has one. There's no way to compare them, no way to evaluate them, no way for a regulator to point at "the standard." The [SPEC](./SPEC.md) is language-neutral — Python is the reference implementation; conforming implementations in TypeScript, Go, or Rust are welcome.
 2. **A reference implementation that a third party can adopt without depending on a private vendor.** Trust infrastructure that ships only inside a proprietary platform is not trust infrastructure; it's vendor lock-in.
-3. **An eval substrate** — the companion eval harness (coming v0.4) measures gate-bypass surface, audit-log completeness, blast radius on tool misuse. Any agent wrapped with this runtime can be measured against any other.
+3. **An eval substrate** — the companion eval harness (coming v0.4) measures gate-bypass surface, audit-log completeness, blast radius on tool misuse. Any agent wrapped with a conforming runtime — in any language — can be measured against any other, because the audit log format and gate protocol are shared across implementations.
 
 ## Why open source — and why AGPL
 
@@ -122,7 +122,9 @@ Full plan: [ROADMAP.md](./ROADMAP.md).
 
 ## Funding & affiliation
 
-`guardian-agent` is funded as a public-goods deliverable. FlowDot LLC (NY, founded 2025) is the upstream maintainer of the codebase and operates the commercial FlowDot platform that depends on these primitives. The spec, reference implementation, and eval harness are released open-source independently of the FlowDot product.
+`guardian-agent` is funded as a public-goods deliverable. FlowDot LLC (NY, founded 2025) is the upstream maintainer.
+
+FlowDot's commercial platform is built on a TypeScript runtime that is an **independent conforming implementation** of the [SPEC](./SPEC.md): it emits the same JSONL audit-log format, consumes the same `permissions.yaml`, speaks the same gate protocol, and honors the same emergency-stop semantics. The Python reference implementation in this repository serves the Python-centric agent and evaluation ecosystem (LangChain, AutoGen, MCP Python clients, research labs). The TypeScript implementation serves Node-shaped production runtimes. The two share a contract, not code. A TypeScript reference companion package, [`@flowdot-llc/guardian-agent`](https://github.com/flowdot-llc/guardian-agent-ts), is on the public roadmap.
 
 Grant support is being sought from:
 - [Foresight Institute AI for Science & Safety Nodes](https://foresight.org/grants/grants-ai-for-science-safety/)

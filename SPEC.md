@@ -12,6 +12,10 @@ A "conforming implementation" is one that produces audit-log records readable by
 
 ## 1. Scope
 
+This spec is **language-neutral**. The reference implementation in the [`flowdot-llc/guardian-agent`](https://github.com/flowdot-llc/guardian-agent) repository is written in Python; a TypeScript reference companion is being developed in [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts). FlowDot's commercial platform runs an independent TypeScript implementation that also conforms to this spec. Implementations in additional languages are welcome.
+
+What two implementations conform to the same spec means in practice: an audit-log file produced by one can be read and verified by another; a `permissions.yaml` written for one is honored by another; a gate callback URL hosted by one can be invoked by another; an `estop` triggered in one produces an audit event identical in structure to one triggered in another.
+
 This spec defines:
 - §2 — Audit log record format (JSONL on disk; JSON over the wire)
 - §3 — Tool-permission policy file format (YAML)
@@ -24,6 +28,7 @@ It does NOT define:
 - How models are routed or selected
 - How to render the audit log (any JSONL reader works)
 - How to operate the supervisor in production (deployment, multi-tenancy, billing — those are platform concerns)
+- Which programming language an implementation uses
 
 ---
 

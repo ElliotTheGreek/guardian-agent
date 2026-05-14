@@ -65,6 +65,12 @@ Roughly grouped, ordered by expected pull:
 - Tool-namespace conventions document (best practices for naming tools to interact well with the policy file).
 - MCP integration adapter: wrap an MCP client/server transparently.
 
+## TypeScript reference companion (parallel track)
+
+A second reference implementation in TypeScript is being developed in [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts). It follows the same versioned spec and the same release cadence; v0.1.0 in TypeScript lands when v0.1.0 in Python lands, and so on. The Python implementation in this repository remains the reference for the spec; the TypeScript implementation is "the same spec, second language" for Node-shaped production runtimes (Electron, server-side Node, TypeScript MCP clients). Both feed `guardian-eval` via the shared audit-log format and gate protocol.
+
+FlowDot's commercial platform runs an independent TypeScript runtime that also conforms to the spec; it predates `guardian-agent-ts` and is a separate codebase. The shared artifact is the spec, not the source code.
+
 ## v1.0.0 — Stable
 
 - [ ] No breaking spec changes for 90 days.
