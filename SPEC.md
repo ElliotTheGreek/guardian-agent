@@ -1,33 +1,42 @@
 # guardian-agent specification
 
-**Version**: 0.1.0
+**Version**: 0.2.0
 **Status**: draft · interface unstable
 **Last updated**: 2026-05-13
 
-This document specifies the wire formats, file formats, and runtime semantics of the four `guardian-agent` primitives. It is implementation-language-neutral; the reference implementation is Python, but conforming implementations in other languages are welcome.
+This document specifies the wire formats, file formats, and runtime semantics of the `guardian-agent` primitives. It is implementation-language-neutral. A "conforming implementation" produces audit-log records readable by any other conforming implementation, accepts policy files in the format below, exposes the gate protocol described, and implements emergency-stop semantics with identical observable behavior.
 
-A "conforming implementation" is one that produces audit-log records readable by the reference implementation, accepts policy files in the format below, and exposes the four primitives with the semantics described.
+The spec is extracted from FlowDot LLC's production supervisor system (CLI, Native Electron, Mobile React Native, Hub Laravel backend, MCP server, VR Unity). The reference implementations are Python (`flowdot-llc/guardian-agent`) and TypeScript (`flowdot-llc/guardian-agent-ts`).
 
 ---
 
 ## 1. Scope
 
-This spec is **language-neutral**. The reference implementation in the [`flowdot-llc/guardian-agent`](https://github.com/flowdot-llc/guardian-agent) repository is written in Python; a TypeScript reference companion is being developed in [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts). FlowDot's commercial platform runs an independent TypeScript implementation that also conforms to this spec. Implementations in additional languages are welcome.
+This spec is **language-neutral**. Implementations in any language are welcome.
 
-What two implementations conform to the same spec means in practice: an audit-log file produced by one can be read and verified by another; a `permissions.yaml` written for one is honored by another; a gate callback URL hosted by one can be invoked by another; an `estop` triggered in one produces an audit event identical in structure to one triggered in another.
+What "two implementations conform to the same spec" means in practice:
+- An audit-log file produced by one MUST be readable and hash-chain-verifiable by another.
+- A `permissions.yaml` written for one MUST be honored identically by another.
+- A gate callback URL hosted by one MUST be invocable by another.
+- An `estop` triggered in one MUST produce an audit event identical in structure to one triggered in another.
+- HMAC-signed policy files written by one MUST verify under another (see §3.5 site-key contract).
 
 This spec defines:
-- §2 — Audit log record format (JSONL on disk; JSON over the wire)
-- §3 — Tool-permission policy file format (YAML)
+- §2 — Audit log record format
+- §3 — Tool-permission policy: file format, scopes, resolution order, HMAC integrity, site key
 - §4 — HITL approval gate protocol
-- §5 — Emergency-stop primitive semantics
-- §6 — Versioning and compatibility rules
+- §5 — Emergency-stop primitive semantics (in-process and hub-coordinated patterns)
+- §6 — Notification fan-out
+- §7 — Operator-initiated vs. agent-initiated actions
+- §8 — Threat model
+- §9 — Versioning and compatibility
+- §10 — Conformance checklist
 
-It does NOT define:
+This spec does NOT define:
 - How agents call tools (use any framework: LangChain, AutoGen, MCP, native)
 - How models are routed or selected
 - How to render the audit log (any JSONL reader works)
-- How to operate the supervisor in production (deployment, multi-tenancy, billing — those are platform concerns)
+- How to operate the supervisor in production (deployment, multi-tenancy, billing)
 - Which programming language an implementation uses
 
 ---
@@ -36,15 +45,13 @@ It does NOT define:
 
 ### 2.1 Storage
 
-The default storage is **JSON Lines** (JSONL): one JSON object per line, UTF-8 encoded, LF-terminated. Append-only. Records are written in event-occurrence order; readers MUST NOT assume strict chronological order across distributed writers (use the `ts` field plus `event_id` for ordering).
+Default storage is **JSON Lines** (JSONL): one JSON object per line, UTF-8 encoded, LF-terminated. Append-only. Records are written in event-occurrence order.
 
 ### 2.2 Record schema
 
-Every record is a JSON object with the following structure:
-
 ```json
 {
-  "v": "0.1.0",
+  "v": "0.2.0",
   "event_id": "evt_01HXYZ7T9P6M3Q5R8KZNB2WVCM",
   "ts": "2026-05-13T23:45:12.345Z",
   "agent_id": "agent_abc123",
@@ -63,6 +70,7 @@ Every record is a JSON object with the following structure:
     "output_tokens": 567
   },
   "status": "approved",
+  "initiator": "operator",
   "prev_hash": "sha256:9f8c2a...",
   "signature": null
 }
@@ -73,59 +81,61 @@ Every record is a JSON object with the following structure:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `v` | string | yes | Spec version this record conforms to (semver). |
-| `event_id` | string | yes | Globally unique identifier. ULID recommended (sortable, fixed-width). |
-| `ts` | string | yes | ISO-8601 timestamp with millisecond precision, UTC, `Z`-suffixed. |
+| `event_id` | string | yes | Globally unique identifier. ULID recommended. |
+| `ts` | string | yes | ISO-8601 timestamp, millisecond precision, UTC, `Z`-suffixed. |
 | `agent_id` | string | yes | Stable identifier for the agent instance. |
 | `session_id` | string | yes | Identifier for the agent's current logical session. |
-| `kind` | enum | yes | One of: `tool_call`, `tool_result`, `gate_request`, `gate_response`, `policy_check`, `estop`, `session_open`, `session_close`. |
-| `tool` | object | conditional | Required when `kind` is `tool_call`, `tool_result`, `gate_request`, `gate_response`, or `policy_check`. |
-| `tool.name` | string | conditional | Fully-qualified tool name. Format: `<namespace>.<function>` or bare `<function>`. |
-| `tool.args` | object | conditional | Arguments passed to the tool. Object, never string. |
-| `tool.result` | any | conditional | Populated only on `tool_result` events. May be `null` for void tools. |
-| `tool.duration_ms` | number | conditional | Wall-clock duration of the tool execution, populated on `tool_result`. |
-| `model` | object | conditional | Populated for `tool_call` if known. Identifies which model issued the call. |
-| `model.provider` | string | conditional | Lowercase provider name. Examples: `anthropic`, `openai`, `ollama`, `local`. |
+| `kind` | enum | yes | See §2.4. |
+| `tool` | object | conditional | Required for tool/gate/policy events. |
+| `tool.name` | string | conditional | `<namespace>.<function>` or bare `<function>`. |
+| `tool.args` | object | conditional | Tool arguments. Object, never string. |
+| `tool.result` | any | conditional | Populated on `tool_result`. May be `null`. |
+| `tool.duration_ms` | number | conditional | Wall-clock duration on `tool_result`. |
+| `model` | object | conditional | Identifies which model issued the call. Populated on `tool_call` when known. |
+| `model.provider` | string | conditional | Lowercase: `anthropic`, `openai`, `ollama`, `local`. |
 | `model.id` | string | conditional | Provider-specific model identifier. |
-| `model.input_tokens` | number | optional | Token count for the model's input that produced this call. |
-| `model.output_tokens` | number | optional | Token count for the model's output that issued this call. |
-| `status` | enum | yes | One of: `pending`, `approved`, `denied`, `executed`, `errored`, `halted`. |
-| `prev_hash` | string | yes | `sha256:<hex>` over the previous record's full JSON bytes; `sha256:0` for the first record. Hash chain. |
-| `signature` | string | optional | ed25519 signature over the record bytes with `signature` field cleared. Format: `ed25519:<base64url>`. v0.5+. |
+| `model.input_tokens` | number | optional | Input token count. |
+| `model.output_tokens` | number | optional | Output token count. |
+| `status` | enum | yes | `pending` \| `approved` \| `denied` \| `executed` \| `errored` \| `halted`. |
+| `initiator` | enum | yes | `operator` \| `agent` \| `system`. See §7. |
+| `prev_hash` | string | yes | `sha256:<hex>` over the previous record's full JSON bytes. `sha256:0` for first. |
+| `signature` | string | optional | `ed25519:<base64url>` over the record bytes with `signature` cleared. v0.5+. |
 
-### 2.4 Event sequence
+### 2.4 Event kinds and sequences
 
-For a typical approved tool call, the sequence is four events:
+`kind` values: `session_open` · `tool_call` · `gate_request` · `gate_response` · `policy_check` · `tool_result` · `estop_press` · `estop_clear` · `session_close`.
 
-1. `tool_call` (`status: pending`) — agent issued the call
-2. `gate_request` (`status: pending`) — gate asked the operator
-3. `gate_response` (`status: approved`) — operator allowed
-4. `tool_result` (`status: executed`) — tool ran, result captured
+**Approved tool call** (4 events):
+1. `tool_call` (status `pending`)
+2. `gate_request` (status `pending`)
+3. `gate_response` (status `approved`)
+4. `tool_result` (status `executed`)
 
-For a denied call, the sequence is three events:
+**Denied call via gate** (3 events):
+1. `tool_call` (`pending`)
+2. `gate_request` (`pending`)
+3. `gate_response` (`denied`) — terminal
 
-1. `tool_call` (`status: pending`)
-2. `gate_request` (`status: pending`)
-3. `gate_response` (`status: denied`) — no execution event follows
+**Policy-blocked call** (2 events):
+1. `tool_call` (`pending`)
+2. `policy_check` (`denied`) — terminal, no gate
 
-For a policy-blocked call (no gate involved):
+**Pre-approved call** (3 events, e.g. `forever-allow`):
+1. `tool_call` (`pending`)
+2. `policy_check` (`approved`)
+3. `tool_result` (`executed`)
 
-1. `tool_call` (`status: pending`)
-2. `policy_check` (`status: denied`) — terminal
+**Emergency-stop press**: a terminal `estop_press` (`halted`) event. Any in-flight `gate_request` resolves with `decision: deny`, `reason: "halt"`. Subsequent calls raise `GuardianHalted` until clear.
 
-For an emergency-stop:
-
-1. ... (any in-flight events)
-2. `estop` (`status: halted`) — terminal for the session
+**Emergency-stop clear**: an `estop_clear` event. Session resumes only by constructing a new runtime (see §5.4).
 
 ### 2.5 Hash chain
 
-`prev_hash` is computed over the previous record's complete JSON bytes (including its `prev_hash` field, excluding its trailing newline). The first record in a log file has `"prev_hash": "sha256:0"`.
-
-A reader can verify log integrity by recomputing the chain. A break in the chain indicates tampering, truncation, or out-of-order writes.
+`prev_hash` is computed over the previous record's complete JSON bytes (including its own `prev_hash` field, excluding trailing newline). First record uses `sha256:0`. A reader verifies log integrity by recomputing the chain. A break indicates tampering, truncation, or out-of-order writes.
 
 ### 2.6 Signatures (v0.5+)
 
-Optional. When present, `signature` is an ed25519 signature over the record bytes with the `signature` field set to `null`. Public keys are distributed out-of-band; key rotation and revocation are out of scope for v0.x.
+When present, `signature` is an ed25519 signature over the record bytes with `signature: null`. Public keys are distributed out-of-band. Key rotation is out of scope for v0.x.
 
 ---
 
@@ -133,65 +143,134 @@ Optional. When present, `signature` is an ed25519 signature over the record byte
 
 ### 3.1 File format
 
-YAML. One policy file per agent or per agent class. Loaded at runtime startup; reloadable on SIGHUP in the reference implementation.
+YAML. One policy file per agent or agent class. Two files together form the active state:
+
+- `permissions.yaml` (or `.json`) — HMAC-signed; persisted `forever` and `banned` rules.
+- `session.yaml` — unsigned; in-session `session` rules. Discarded between sessions.
 
 ```yaml
-version: "0.1"
+version: "0.2"
 agent_id: "agent_demo"
 
 defaults:
-  mode: gate           # gate | allow | deny
-  scope: session       # session | permanent
+  scope: prompt        # prompt | once | session | forever | banned
 
-permissions:
-  - tool: "schwab_trading.*"
-    mode: gate
-    scope: session
+rules:
+  # Exact-match rules win over wildcards.
   - tool: "filesystem.read"
-    mode: allow
-    scope: permanent
+    scope: forever
+    decision: allow
+
   - tool: "filesystem.write"
-    mode: deny
+    scope: banned          # permanent deny
+
+  - tool: "schwab_trading.*"
+    scope: session
+    decision: allow
+
   - tool: "network.http_post"
-    mode: gate
-    scope: permanent
-    notes: "External writes require explicit approval each session."
+    scope: prompt          # always ask
 ```
 
-### 3.2 Modes
+### 3.2 Decisions and scopes (orthogonal axes)
 
-- `allow` — tool call proceeds without consulting the gate.
-- `deny` — tool call is rejected; a `policy_check` event with `status: denied` is logged; no `tool_result` is generated.
-- `gate` — tool call is suspended; a `gate_request` event is emitted; the configured approval gate is invoked; the gate's response determines whether the call proceeds.
+Decisions: `allow` | `deny`.
 
-### 3.3 Scopes
+Scopes (persistence): `once` | `session` | `forever` | `banned`.
 
-- `session` — applies only within the current session (defined by `session_id` in the audit log).
-- `permanent` — applies across sessions. Persisted between runtime restarts via the policy file.
+- `once` — applies to this call only; not persisted.
+- `session` — applies within the current `session_id`; lives in `session.yaml`.
+- `forever` — applies across sessions; lives in `permissions.yaml`.
+- `banned` — `(decision=deny, scope=forever)`. The shorthand exists because it's the most common deny pattern.
+
+The synthetic scope `prompt` means "no rule matches; consult the configured gate."
+
+### 3.3 Resolution order
+
+For a given tool name in a given session, the evaluator returns the **first matching** decision in this order:
+
+1. `banned` (forever-deny, exact match)
+2. `banned` (forever-deny, wildcard match)
+3. `forever` allow (exact match)
+4. `forever` allow (wildcard match)
+5. `session` allow (exact match)
+6. `session` allow (wildcard match)
+7. `defaults.scope` if not `prompt`
+8. `prompt` (invoke gate)
+
+**Banned beats allow at every layer.** A `banned` rule cannot be overridden by an allow rule, ever. This is the "kill switch for tools" semantic from FlowDot's existing permission service.
 
 ### 3.4 Matching rules
 
-Tool names are matched using shell-style wildcards (`fnmatch`). Specificity wins: an exact match overrides a wildcard match. If multiple wildcard patterns match, the first listed in the file wins.
+Tool names match using shell-style globs (`fnmatch`):
+- `*` matches any sequence including the empty string
+- `?` matches exactly one character
+- `[seq]` matches one character from the set
 
-The `defaults` block applies to any tool not matched by a rule in `permissions`.
+Wildcard `*` alone matches every tool. Exact match always wins over any wildcard match. Among multiple wildcards of equal specificity, the first listed wins.
 
-### 3.5 Reserved tool names
+Reserved tool-name prefixes (MUST NOT appear in policy files): `guardian.`, `runtime.`, `internal.`.
 
-The following tool-name prefixes are reserved for runtime use and MUST NOT appear in policy files: `guardian.`, `runtime.`, `internal.`.
+### 3.5 HMAC integrity and the site key
+
+`permissions.yaml` MUST be signed with HMAC-SHA256. On disk, the file is wrapped:
+
+```yaml
+version: 1
+signed_at: "2026-05-13T23:45:12.345Z"
+signature: "<base64-hmac-sha256>"
+data: |
+  version: "0.2"
+  agent_id: "agent_demo"
+  defaults:
+    scope: prompt
+  rules: ...
+```
+
+The HMAC is computed over the UTF-8 bytes of the canonical-form `data` payload, using the **site key** as the HMAC key.
+
+**Site key**:
+- Stored in `.flowdot/site.key` (or platform-appropriate equivalent).
+- 32 random bytes, generated on first run if absent.
+- File mode `0o600` (owner read/write only).
+- Never transmitted; never logged.
+
+Cross-language interop note: deriving the integrity key from OS identifiers (hostname, cpu model, homedir) breaks cross-language portability — Python and TypeScript see slightly different identifier strings. The `site.key` file is the canonical solution and replaces any prior implementation that derived from OS state.
+
+On signature verification failure, the implementation MUST refuse to load the file and MUST treat the policy as empty (fail-closed). It MAY emit a security audit event.
+
+`session.yaml` is unsigned. It is rewritten on every change and cleared on session end.
+
+### 3.6 Cross-surface storage convention
+
+Implementations writing to a shared directory (e.g., `.flowdot/`) for multi-process or multi-surface use:
+
+- Directory mode: `0o700` (owner-only).
+- File mode: `0o600` for sensitive files (`permissions.yaml`, `session.yaml`, `site.key`).
+- Audit logs (`audit.jsonl`) MAY be mode `0o600` or `0o640` depending on read-only access requirements.
+- Concurrent writers MUST use OS-level file locks (advisory `flock` on Unix; `LockFileEx` on Windows) when writing the policy files.
+- Secure delete (3-pass overwrite) before `unlink` for `permissions.yaml` and `site.key` deletion.
+
+### 3.7 Categories (optional)
+
+Tools MAY belong to categories. The library ships a default category set (`command-execute`, `file-read`, `file-write`, `file-create`, `network-write`, `network-read`, `mcp-tool`, `toolkit-tool`, `flowdot-tool`) but consumers MAY define their own.
+
+Category-level rules use the prefix syntax `category:<name>`:
+
+```yaml
+rules:
+  - tool: "category:file-write"
+    scope: forever
+    decision: allow
+```
+
+Category rules are evaluated **after** specific tool rules but **before** the wildcard fallback.
 
 ---
 
 ## 4. HITL approval gate
 
 ### 4.1 Interface
-
-An approval gate is any callable conforming to the following signature:
-
-```python
-def approval_gate(request: GateRequest) -> GateResponse: ...
-```
-
-Where:
 
 ```python
 @dataclass
@@ -202,132 +281,256 @@ class GateRequest:
     agent_id: str
     session_id: str
     model: Optional[ModelAttribution]
-    context: Optional[str] # natural-language summary the agent provides
+    context: Optional[str]  # natural-language summary the agent provides
+    granularity: Literal["tool", "toolkit", "category"]  # see §4.3
+    timeout_ms: Optional[int]  # gate-side timeout hint
 
 @dataclass
 class GateResponse:
-    decision: Literal["allow", "allow_session", "always_allow", "deny"]
+    decision: Literal["allow", "allow_session", "allow_forever", "deny", "ban_forever"]
     reason: Optional[str]
     operator_id: Optional[str]
+    granularity: Literal["tool", "toolkit", "category"]
+```
+
+A gate is any callable matching:
+
+```python
+def approval_gate(request: GateRequest) -> GateResponse: ...
 ```
 
 ### 4.2 Decision semantics
 
-- `allow` — this specific call proceeds. The next call to the same tool re-prompts.
-- `allow_session` — this and all subsequent calls to the same tool within the current session proceed without prompting. Equivalent to upgrading the in-memory policy to `mode: allow, scope: session`.
-- `always_allow` — this and all subsequent calls to the same tool, across sessions, proceed without prompting. The policy file is updated; the change is persisted.
+- `allow` — this call proceeds. Re-prompts on the next call to the same identifier.
+- `allow_session` — upgrades the in-memory policy: identifier becomes `(allow, session)`. Persisted to `session.yaml`.
+- `allow_forever` — upgrades the persistent policy: identifier becomes `(allow, forever)`. Persisted to `permissions.yaml`.
 - `deny` — this call does not proceed; no policy change.
+- `ban_forever` — `(deny, forever)`: identifier is banned. Persisted to `permissions.yaml`. Equivalent to setting the rule's `scope: banned`.
 
-### 4.3 Reference gate implementations
+### 4.3 Granularity
 
-The reference implementation ships three approval-gate adapters:
+`granularity` determines what identifier the decision applies to:
 
-- `cli_approval_gate` — synchronous, blocking stdin prompt. Suitable for local development.
-- `async_callback_gate(url)` — POSTs the `GateRequest` to a callback URL, awaits a JSON response. Suitable for production deployments where a separate UI handles operator approval.
-- `programmatic_gate(handler)` — calls a Python handler. Suitable when the host application has its own UI.
+- `tool` — applies only to this specific tool name (e.g., `schwab_trading.list_accounts`).
+- `toolkit` — applies to all tools under the same toolkit/namespace prefix (e.g., `schwab_trading.*`).
+- `category` — applies to all tools sharing the same category (e.g., `category:file-write`).
 
-### 4.4 Operator identification
+The gate request includes the runtime's suggested granularity; the gate response confirms or downgrades it. A response MUST NOT escalate granularity (e.g., responding `toolkit` to a `tool`-level request) — that requires a separate gate invocation.
 
-`operator_id` is opaque to the runtime. It is recorded in the audit log for attribution. The runtime does not authenticate operators; that is the responsibility of the gate implementation.
+### 4.4 Reference gate implementations
+
+| Adapter | Transport | Use case |
+|---|---|---|
+| `cli_approval_gate` | Blocking stdin prompt | Local development, single-process CLI |
+| `async_callback_gate(url)` | POST `GateRequest`, await JSON response | Web/native UI with separate operator app |
+| `programmatic_gate(handler)` | Direct callable | Host has its own UI (Electron renderer, mobile RN, etc.) |
+| `data_channel_gate` | LiveKit data-channel frames | Voice/live-agent surfaces |
+
+Conforming implementations SHOULD provide at least `cli` and `programmatic`.
+
+### 4.5 Operator identification
+
+`operator_id` is opaque to the runtime. Recorded in audit for attribution. The runtime does not authenticate operators — that is the gate adapter's responsibility.
+
+### 4.6 Gate timeout and halt behavior
+
+If the gate does not respond within `timeout_ms` (default 600,000 ms = 10 min), the runtime treats it as `deny` with `reason: "gate_timeout"` and emits a `gate_response` event accordingly.
+
+If `estop` fires while a gate request is in flight, the gate is auto-resolved with `decision: deny`, `reason: "halt"`.
 
 ---
 
 ## 5. Emergency-stop
 
-### 5.1 Triggers
+The supervisor primitive comes in two deployment shapes. Both share the audit-log shape and observable behavior.
 
-The emergency-stop primitive can be triggered by:
+### 5.1 Triggers (both shapes)
 
-1. **In-process call**: `runtime.estop(reason: str, operator_id: Optional[str] = None)`.
-2. **POSIX signal**: `SIGUSR1` is reserved for emergency-stop in the reference implementation. Custom signal handlers may be installed.
-3. **Programmatic from another thread**: the runtime exposes an `estop_event` (`threading.Event`) that any thread may set.
+1. **In-process call**: `runtime.estop(reason, operator_id?)`.
+2. **POSIX signal**: SIGUSR1 reserved. (Note: Node uses SIGUSR1 for inspector; TS impl uses SIGUSR2.)
+3. **Cross-process broadcast**: see §5.3 / §5.4 per shape.
 
-### 5.2 Semantics
+### 5.2 Common semantics on press
 
-When triggered:
+1. Set internal halt flag.
+2. Any tool currently executing is allowed to complete (no forced interruption).
+3. Any pending `gate_request` auto-resolves as `deny / halt`.
+4. The next attempt to wrap or call a tool raises `GuardianHalted`.
+5. An `estop_press` event is written with `status: halted` and `initiator: operator`.
+6. Audit log is flushed.
+7. Notifier fan-out fires (see §6).
 
-1. The runtime sets an internal halt flag.
-2. Any tool call currently being executed is allowed to complete (no forced thread termination — the runtime does not interrupt user code mid-syscall).
-3. Any pending `gate_request` is auto-resolved with `decision: deny`, `reason: "halt"`.
-4. The next attempt to wrap or call a tool raises `GuardianHalted` from the runtime.
-5. An `estop` event is written to the audit log with `status: halted`.
-6. The audit log is flushed.
+The runtime does NOT call `sys.exit` / `process.exit`. Halt is scoped to the runtime; the host decides how to react.
 
-The runtime does not call `sys.exit`. Halt semantics are scoped to the runtime; the host process decides how to react.
+### 5.3 In-process pattern (single-process deployment)
 
-### 5.3 Recovery
+For researcher / eval / standalone-agent use cases:
 
-A halted runtime is terminal. To resume operation, a new `GuardianRuntime` instance must be constructed (which begins a new session).
+- Halt flag is a process-local `AbortController` / `threading.Event`.
+- No HTTP, no middleware, no DB.
+- Clear: construct a new `GuardianRuntime` instance. The flag and the audit-log session ID are immutable; halts are session-terminal.
+
+This is the default mode for `GuardianRuntime` constructed without an explicit `EStopHub` adapter.
+
+### 5.4 Hub-coordinated pattern (FlowDot's production deployment)
+
+For multi-surface platforms (web hub + native + mobile + CLI + MCP):
+
+- **State table**: server-side row per user (or per agent), `pressed_at` / `cleared_at` columns. Append-only `estop_events` audit table.
+- **Hot-path cache**: server caches the `isPressed(userId)` query with a 1-second TTL. Cache invalidated on every press and clear.
+- **Press fan-out**: a single endpoint (`POST /api/.../estop`) sets the sticky flag, forwards to in-flight runtimes (Node servers, daemons), broadcasts via a poll-channel for offline daemons, writes audit, fires notifier.
+- **Middleware gate**: side-effectful HTTP routes opt into an `EnsureNotPressed` middleware that returns **HTTP 423 Locked** with structured JSON while a press is active. Default ungated; opt-in per route.
+- **Clear**: separate endpoint protected by recent-auth (e.g., password.confirm). Always reachable while pressed.
+- **Pull-based safety net**: daemons that may miss push broadcasts poll the status endpoint every 5s.
+- **Per-user scoping**: every press, clear, and check is bound to a single user identity. Admin-style cross-user actions MUST NOT exist.
+
+The 423 status was chosen over 403 because RFC 4918 423 carries the specific semantic of "the resource is currently locked" — a temporary, owner-clearable condition.
+
+### 5.5 Two-tap arming (UI convention)
+
+Press controls SHOULD use two-tap arming with a 3-second window:
+1. First tap arms the control (color tint, label change).
+2. Second tap within 3 s fires the press.
+3. Timer expires silently if no second tap.
+
+This is a UX convention, not a wire requirement. A conforming implementation MAY use a different confirm pattern.
+
+### 5.6 Local instant feedback
+
+Press handlers SHOULD perform local instant feedback (cancel local runtime, collapse UI) **before** the network call, so the user sees motion immediately. The network call is fire-and-forget at the UI layer; failures only log.
 
 ---
 
-## 6. Versioning and compatibility
+## 6. Notifications
 
-This spec follows semantic versioning:
+### 6.1 Interface
 
-- **MAJOR** version bumps when the wire format changes incompatibly.
-- **MINOR** version bumps when fields are added in a backward-compatible way.
-- **PATCH** version bumps for spec clarifications that do not change behavior.
+A notifier is any callable matching:
 
-The reference implementation pins to a major spec version. Readers MUST accept records with patch/minor version differences from their own; readers SHOULD reject records with a higher major version.
+```python
+def notifier(event: NotificationEvent) -> None: ...
 
-The `v` field in every audit record is the spec version that the writer claims to conform to.
+@dataclass
+class NotificationEvent:
+    kind: Literal["estop_press", "estop_clear", "policy_breach", "gate_denied"]
+    user_id: Optional[str]
+    agent_id: str
+    ts: str
+    source: str               # "cli" | "native" | "mobile" | ...
+    summary: dict             # e.g. { stopped_executions: 2, ip: "1.2.3.4" }
+    canonical_clear_url: Optional[str]
+```
+
+### 6.2 Mandatory fan-out events
+
+A conforming implementation MUST fire notifications on:
+
+- `estop_press` — every press, every time.
+- `estop_clear` — every clear, every time.
+
+A conforming implementation MAY fire notifications on `policy_breach` (a `banned` tool was attempted) and `gate_denied` (an operator denied a gate prompt).
+
+### 6.3 Reference notifier adapters
+
+| Adapter | Transport | Use case |
+|---|---|---|
+| `console_notifier` | stderr write | Development |
+| `webhook_notifier(url)` | POST JSON | Production HTTP integrations |
+| `email_notifier(config)` | SMTP send | Operator paging |
+| `multi_notifier([n1, n2, ...])` | Fan-out to several | Production |
+
+### 6.4 Signed URLs
+
+When the notification includes a `canonical_clear_url`, the URL SHOULD be cryptographically signed (e.g., HMAC token in query string) so it cannot be forged. This is a recommendation, not a requirement.
 
 ---
 
-## 7. Threat model
+## 7. Operator-initiated vs. agent-initiated actions
 
-`guardian-agent` defends against:
+Every audit record carries an `initiator` field:
 
-- **Unintended tool invocation by the agent** — the agent calls a tool the operator did not authorize.
-- **Tool call drift** — a sequence of approved calls leading to an outcome the operator would not have approved holistically (mitigated, not solved — see roadmap).
-- **Post-incident reconstruction** — what did the agent do? When? With what arguments? Against which model? The hash-chained audit log answers these.
+- `operator` — direct human action (UI tap, API call carrying the appropriate header).
+- `agent` — autonomous tool-using agent action.
+- `system` — runtime-internal (timeouts, signal handlers).
 
-It does NOT defend against:
+Implementations MUST reject `estop_clear` requests with `initiator: agent`. Adversarial prompt injection that convinces an agent to clear its own kill switch is the most dangerous failure mode; this check is the load-bearing defense.
 
-- **A compromised runtime** — if the runtime process is fully compromised, the supervisor is too. Defense-in-depth assumes the runtime is trusted.
-- **A compromised model** — if the model issues malicious tool calls, the supervisor catches them at the gate (if configured) but cannot detect malice from output content alone.
-- **Prompt injection of the agent** — handled by composition with prompt-injection defenses (e.g., Tripwire) at a lower layer.
+Implementations MAY reject `estop_press` requests with `initiator: agent` if the deployment configuration sets `allow_agent_initiated_press: false` (default: `true`, since agents *should* be able to halt themselves on detected anomaly).
+
+The `initiator` is determined by an HTTP header on hub-coordinated deployments (e.g., `x-guardian-initiator: operator | agent | system`) and by an explicit argument on in-process calls.
+
+---
+
+## 8. Threat model
+
+### 8.1 Defends against
+
+- **Unintended tool invocation by the agent** — policy + gate intercept.
+- **Tool-call drift** — sequence of approved calls leading to unwanted outcome (mitigated, not solved).
+- **Post-incident reconstruction** — hash-chained audit log records what happened.
+- **Silent denial of service** — every press AND clear notifies the operator; silent DoS becomes noisy.
+- **Cross-user attack** — per-user scoping at every level; no admin override.
+- **Audit-log tampering** — hash chain detects modification; optional signatures prove authorship.
+- **Adversarial prompt injection clearing E-stop** — `initiator: agent` requests for clear are rejected (§7).
+- **Policy-file tampering** — HMAC integrity; fail-closed on verification failure (§3.5).
+
+### 8.2 Does NOT defend against
+
+- **Compromised runtime process** — if the process is fully compromised, the supervisor is too.
+- **Compromised model** — supervisor catches malicious tool calls at the gate (if configured) but cannot detect malicious content in outputs alone.
+- **Prompt injection of agent input** — handled at a lower layer (e.g., Tripwire).
 - **Side-channel data exfiltration** — out of scope.
+- **Compromised storage** — if attacker can write `permissions.yaml` AND has the site key, supervisor is bypassed.
 
-The threat model assumes:
+### 8.3 Assumptions
 
-- The host process and the runtime are trusted.
+- The host process and runtime are trusted.
 - The audit log destination is append-only and access-controlled by the host system.
-- The policy file is integrity-protected by the host system (e.g., readonly mount, signed deploy).
+- The site key is protected by filesystem permissions appropriate to the host environment.
 
 ---
 
-## 8. Conformance checklist
+## 9. Versioning and compatibility
+
+Semantic versioning. MAJOR bumps on incompatible wire-format changes; MINOR on additive fields; PATCH on clarifications.
+
+Readers MUST accept records with patch/minor differences from their own. Readers SHOULD reject records with a higher MAJOR version.
+
+The `v` field in every record is the spec version the writer claims to conform to.
+
+---
+
+## 10. Conformance checklist
 
 A conforming implementation MUST:
 
-- Emit JSONL records matching §2.2 with all required fields present.
-- Maintain the hash chain per §2.5.
-- Honor the four `mode` values per §3.2.
-- Implement the gate protocol per §4.1 with the four decision semantics per §4.2.
-- Provide an emergency-stop primitive per §5 that produces the documented event sequence.
+- [ ] Emit JSONL records matching §2.2 with all required fields present.
+- [ ] Maintain the hash chain per §2.5.
+- [ ] Honor the four scopes per §3.2 and the resolution order per §3.3.
+- [ ] HMAC-sign the persistent policy file using the site key (§3.5); fail-closed on verification failure.
+- [ ] Implement the gate protocol per §4.1 with all five decision values per §4.2.
+- [ ] Provide an emergency-stop primitive per §5 that produces the documented event sequence.
+- [ ] Fire notifications on every `estop_press` and `estop_clear` per §6.2.
+- [ ] Reject `estop_clear` requests with `initiator: agent` per §7.
+- [ ] Per-user scope every operation; reject cross-user state references.
 
 A conforming implementation MAY:
 
 - Add additional event `kind` values, prefixed with `x_` to indicate extension.
-- Support pluggable storage backends beyond JSONL.
-- Add additional gate implementations.
-- Sign audit records (v0.5+).
+- Support pluggable audit-log storage backends beyond JSONL.
+- Add additional gate or notifier adapters.
+- Sign audit records with ed25519 (v0.5+).
+- Provide a hub-coordinated deployment shape (§5.4) in addition to in-process.
 
 ---
 
-## Open questions for v0.2+
-
-These are intentionally unspecified in v0.1.0 and will be settled as the implementation matures:
+## Open questions for v0.3+
 
 1. **Distributed audit logs** — how do multiple runtime instances coordinate a single hash chain? Likely answer: per-instance chains plus a coordinator that joins them.
-2. **Argument redaction** — how should sensitive arguments (PII, credentials) be redacted in audit records while preserving auditability? Likely answer: schema-driven redaction with a `*_hash` placeholder.
-3. **Replay verification CLI** — what's the canonical tool for verifying a log file's integrity? Likely answer: `guardian-verify <file.jsonl>`.
-4. **Policy composition** — can multiple policy files be merged? With what precedence rules?
-
-Comments and issues welcome.
+2. **Argument redaction** — schema-driven `*_hash` placeholders for PII fields.
+3. **Replay verification CLI** — `guardian-verify <file.jsonl>`.
+4. **Model-aware policy rules** — `when: { model.provider: "anthropic", model.id: "claude-*-4.5*" }` extension to §3.
 
 ---
 
-*This specification is © 2026 FlowDot LLC, released under AGPL-3.0-or-later. The spec text itself is also released under CC BY-SA 4.0 to encourage citation and adaptation in research and policy work.*
+*Specification © 2026 FlowDot LLC. AGPL-3.0-or-later. Spec text additionally licensed CC BY-SA 4.0.*

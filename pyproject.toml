@@ -38,7 +38,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0",
-    "ulid-py>=1.1",
+    "python-ulid>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -58,9 +58,6 @@ Repository = "https://github.com/flowdot/guardian-agent"
 Documentation = "https://github.com/flowdot/guardian-agent/blob/main/SPEC.md"
 Issues = "https://github.com/flowdot/guardian-agent/issues"
 Upstream = "https://flowdot.ai"
-
-[project.scripts]
-guardian-verify = "guardian_agent.cli:verify_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/guardian_agent"]
