@@ -1,0 +1,21 @@
+version: "0.1"
+agent_id: "agent_demo"
+
+defaults:
+  mode: gate
+  scope: session
+
+permissions:
+  - tool: "list_brokerage_accounts"
+    mode: allow
+    scope: permanent
+    notes: "Read-only enumeration; safe to auto-approve."
+
+  - tool: "get_positions"
+    mode: gate
+    scope: session
+    notes: "Touches account-scoped data; require operator confirmation."
+
+  - tool: "place_order"
+    mode: deny
+    notes: "No automated trade execution under this policy."

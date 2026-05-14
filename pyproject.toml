@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "guardian-agent"
+version = "0.1.0"
+description = "A runtime supervisor for tool-using LLM agents: audit log, tool-permission scoping, HITL approval gates, and emergency-stop."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Elliot Mousseau", email = "elliot@flowdot.ai" },
+]
+keywords = [
+    "ai-safety",
+    "agents",
+    "llm",
+    "audit-log",
+    "supervisor",
+    "guardian-agents",
+    "human-in-the-loop",
+    "capability-security",
+    "mcp",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "ulid-py>=1.1",
+]
+
+[project.optional-dependencies]
+signatures = [
+    "cryptography>=42.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/flowdot/guardian-agent"
+Repository = "https://github.com/flowdot/guardian-agent"
+Documentation = "https://github.com/flowdot/guardian-agent/blob/main/SPEC.md"
+Issues = "https://github.com/flowdot/guardian-agent/issues"
+Upstream = "https://flowdot.ai"
+
+[project.scripts]
+guardian-verify = "guardian_agent.cli:verify_main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guardian_agent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
