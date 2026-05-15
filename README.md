@@ -4,7 +4,7 @@
 
 **Status**: pre-alpha · tracks SPEC v0.5 · Python port to TypeScript parity in progress · not yet on PyPI
 
-> **For evaluators / reviewers**: this Python implementation is currently a spec-first stub being brought up to parity with the TypeScript reference implementation at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts), which has shipped through the v0.10 milestone (full v0.1–v0.10 feature set, 535 tests, 100% line+branch+function coverage). The two implementations share a single canonical [SPEC](./SPEC.md); see [§ Project status & roadmap](#project-status--roadmap) for the path to parity.
+> **For evaluators / reviewers**: this Python implementation is currently a spec-first stub being brought up to parity with the TypeScript reference implementation at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts), which has shipped through the v0.10 milestone (full v0.1–v0.10 feature set, 539 tests, 100% line+branch+function coverage). The two implementations share a single canonical [SPEC](./SPEC.md); see [§ Project status & roadmap](#project-status--roadmap) for the path to parity.
 
 ---
 
@@ -111,7 +111,7 @@ For organizations that need a non-copyleft license for internal use, **commercia
 
 ## Project status & roadmap
 
-This Python repo is currently a spec-first stub. The TypeScript reference at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts) has already implemented v0.1–v0.10 (full trust foundation + runtime safety layer + offline analysis tools) with 535 tests at 100% line+branch+function coverage. The Python port path is to catch up to TS parity milestone by milestone:
+This Python repo is currently a spec-first stub. The TypeScript reference at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts) has already implemented v0.1–v0.10 (full trust foundation + runtime safety layer + offline analysis tools) with 539 tests at 100% line+branch+function coverage. The Python port path is to catch up to TS parity milestone by milestone:
 
 - **v0.1.0** *(now)* — SPEC + audit-log record format + minimal Python reference impl of audit log only. No signatures yet.
 - **v0.2.0** — Tool-permission scoping (policy YAML, wildcard matching, enforcement). Matches SPEC §3.
