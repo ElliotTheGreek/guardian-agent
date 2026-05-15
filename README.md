@@ -14,16 +14,26 @@ Production LLM agents call tools. The tools touch real systems — brokerage acc
 
 There is no public reference implementation a regulated-industry deployer or evaluator can pick up. Each team builds the same four primitives from scratch, badly. Each evaluator has to read source code to know whether the supervisor is real or theater.
 
-`guardian-agent` is the missing reference implementation: four primitives, one small library, one public spec.
+`guardian-agent` is the missing reference implementation: a clear primitive set, one small library, one public spec.
 
-## The four primitives
+## The primitives
+
+The [SPEC](./SPEC.md) covers two concentric layers. The foundation primitives (this section) are the minimum useful supervisor. The runtime-safety layer ([SPEC §11–§16](./SPEC.md)) layers on top and is already implemented in the TypeScript reference; Python implementations land progressively per the roadmap below.
+
+**Foundation primitives** (SPEC §2–§5):
 
 1. **Audit log** — every tool call gets a structured, append-only record. Hash-chained for tamper evidence; optionally signed with ed25519. Persistable to JSONL today, pluggable backends in v0.2+.
 2. **Tool-permission scoping** — a YAML policy declares which tools are allowed, denied, session-only, or always-allow. Wildcards and groups supported. Enforced at every call site.
 3. **HITL approval gate** — a configurable hook pauses the agent before a tool fires and surfaces an approval prompt to a human operator. Synchronous (CLI blocking prompt), async (callback URL), or programmatic (your UI handles it).
 4. **Emergency-stop** — a process-wide kill switch. Triggered by signal, API call, or external callback. Halts the agent mid-loop, flushes the audit log, raises `GuardianHalted`.
 
-Nothing else.
+**Runtime-safety layer** (SPEC §11–§16) — external chain attestation, honeytokens, capability tags + Yellow-line tripwires, per-capability rate limits, two-key operator authorization, dead-man's heartbeat. Shipped in the TypeScript reference at the v0.10 feature milestone; Python parity is on the roadmap.
+
+**Offline analysis** (SPEC §17–§18) — behavioral baselines and cross-surface correlation. Shipped in the TS reference; Python parity is on the roadmap.
+
+## See it working
+
+The TypeScript reference at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts) includes three minimal demos that each demonstrate one supervisor primitive end-to-end — tamper-evident audit, HITL approval gate intercepting a `wire_transfer`, and a honeytoken catching an exfiltration attempt. They render inline on the TS repo's README. Anyone can clone and re-run them with `npm install && npm run demo:N`. Python ports of these demos land alongside the Python implementation of each primitive.
 
 ## Quickstart
 
@@ -84,7 +94,7 @@ It is deliberately small. To stay useful, it does not become any of:
 - **A platform** — no hub, no accounts, no multi-tenancy, no billing, no managed deployment.
 - **A workflow builder** — no node graph, no recipes, no connections.
 - **An observability dashboard** — no web UI. The audit log is structured JSONL; render it however you want.
-- **A model evaluation suite** — the companion [`guardian-eval`](./docs/eval-companion.md) package (coming v0.4) will measure gate-bypass surface and audit-log completeness. `guardian-agent` itself only enforces.
+- **A model evaluation suite** — a separate companion package (`guardian-eval`, planned as a grant-funded public-goods deliverable) will measure gate-bypass surface and audit-log completeness across Claude / GPT / Ollama. `guardian-agent` itself only enforces; `guardian-eval` will measure.
 
 If you want any of the above, the upstream project — [FlowDot](https://flowdot.ai) — provides them. `guardian-agent` is the supervisor primitive that FlowDot is built on top of; FlowDot is the operated, hosted, multi-surface platform that depends on these primitives. Either can be used without the other.
 

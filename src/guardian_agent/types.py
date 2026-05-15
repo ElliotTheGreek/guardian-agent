@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
-SPEC_VERSION = "0.2.0"
+SPEC_VERSION = "0.5.0"
 
 AuditRecordKind = Literal[
     "session_open",
