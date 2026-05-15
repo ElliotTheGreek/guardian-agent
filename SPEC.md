@@ -1,8 +1,8 @@
 # guardian-agent specification
 
-**Version**: 0.2.0
-**Status**: draft · interface unstable
-**Last updated**: 2026-05-13
+**Version**: 0.5.0
+**Status**: draft · interface stabilizing
+**Last updated**: 2026-05-14
 
 This document specifies the wire formats, file formats, and runtime semantics of the `guardian-agent` primitives. It is implementation-language-neutral. A "conforming implementation" produces audit-log records readable by any other conforming implementation, accepts policy files in the format below, exposes the gate protocol described, and implements emergency-stop semantics with identical observable behavior.
 
@@ -473,6 +473,12 @@ The `initiator` is determined by an HTTP header on hub-coordinated deployments (
 - **Audit-log tampering** — hash chain detects modification; optional signatures prove authorship.
 - **Adversarial prompt injection clearing E-stop** — `initiator: agent` requests for clear are rejected (§7).
 - **Policy-file tampering** — HMAC integrity; fail-closed on verification failure (§3.5).
+- **Post-compromise log rewriting** — external chain attestation (§11) detects tamper of the local log after the fact.
+- **Credential probing** — honeytokens (§12) detect tools accessing decoy values with zero false positives.
+- **Exfiltration bursts** — per-capability rate buckets (§14) bite credential + network-egress patterns long before the global rate.
+- **Operator-bypass on sensitive actions** — two-key gate (§15) suspends dispatch pending fresh operator confirmation.
+- **Runaway loops** — dead-man's heartbeat (§16) auto-halts sessions that stop signaling liveness.
+- **Cross-surface compromise** — offline correlator (§18) detects parallel sessions of the same agent_id across surfaces.
 
 ### 8.2 Does NOT defend against
 
@@ -521,15 +527,387 @@ A conforming implementation MAY:
 - Add additional gate or notifier adapters.
 - Sign audit records with ed25519 (v0.5+).
 - Provide a hub-coordinated deployment shape (§5.4) in addition to in-process.
+- Publish chain heads to an external attestor (§11).
+- Scan tool-call args against a consumer-supplied honeytoken set (§12).
+- Tag tools with capability classes and evaluate sliding-window combination rules (§13).
+- Apply per-capability rate limits (§14).
+- Suspend dispatch pending operator confirmation via a two-key gate (§15).
+- Run a dead-man's heartbeat monitor that presses the EStop on hard miss (§16).
+- Produce offline baselines (§17) and cross-surface correlation reports (§18).
+
+A conforming implementation MUST when shipping the optional layers above:
+
+- Recursion-safe attestation: an `x_chain_attested` row MUST NOT re-trigger attestation.
+- Zero-default-tokens for §12: the library MUST NOT ship plausible-looking default honeytokens; consumers register their own.
+- Yellow-before-Red for §13: a Red rule MUST NOT be promoted from Yellow without demonstrated zero organic fires.
+- Opt-in heartbeat: §16 monitor MUST be OFF by default at the runtime level.
 
 ---
 
-## Open questions for v0.3+
+## 11. External chain attestation (v0.3.0+)
+
+The hash chain plus optional ed25519 signatures from §2.5 / §2.6 prove that the log was *consistent at write time*, but the writer's key lives on the same host as the writer. A fully-compromised runtime can sign a fabricated chain just as easily as the legitimate writer (see §8.2). External attestation closes this gap by periodically publishing the chain head to an external append-only store the local process cannot rewrite.
+
+### 11.1 Trigger
+
+An attestation event fires:
+
+- After every N appended records (configurable; default 100).
+- On `session_close` (configurable; default true).
+- On explicit caller request (`writer.runAttestation()`).
+
+### 11.2 Payload
+
+The attestation payload (v=1) is a JSON object with these fields, in any order:
+
+| Field | Type | Description |
+|---|---|---|
+| `v` | `'1'` | Payload schema version. |
+| `agentId` | string | Mirrors `agent_id` on the head record. |
+| `sessionId` | string | Mirrors `session_id` on the head record. |
+| `head` | string | `sha256:<hex>` of the canonical-JSON of the head record. |
+| `signature` | string \| null | Head record's `ed25519:<base64url>` signature, or `null` when signing is disabled. |
+| `recordCount` | integer | Total records appended in this session through the head. |
+| `ts` | string | ISO-8601 timestamp of the attestation event. |
+
+### 11.3 Receipt
+
+The attestor MAY return a receipt:
+
+| Field | Type | Description |
+|---|---|---|
+| `receiptId` | string | Attestor-assigned identifier (URL fragment, Rekor log index, S3 version id, etc.). |
+| `url` | string (optional) | Inspectable URL for the receipt. |
+
+### 11.4 Audit events
+
+On successful attestation, the writer MUST append `x_chain_attested`:
+
+```jsonl
+{"kind":"x_chain_attested","status":"approved","initiator":"system","detail":{"chain_head":"sha256:...","records_in_session":100,"receipt_id":"...","receipt_url":"..."}}
+```
+
+On attestor failure, the writer MUST append `x_chain_attestation_failed` and continue. Attestation failure is NEVER fatal:
+
+```jsonl
+{"kind":"x_chain_attestation_failed","status":"errored","initiator":"system","detail":{"chain_head":"sha256:...","records_in_session":100,"error":"..."}}
+```
+
+Implementations MUST guarantee that an attestation row's own write does not recursively trigger another attestation.
+
+### 11.5 Verifier behavior
+
+A conforming verifier with attestation support MAY:
+
+- Fetch external receipts from the configured endpoint.
+- Cross-check each `x_chain_attested` row's `chain_head` against the receipt's hash for the same `receiptId`.
+- Report any divergence as a tamper indicator with the same exit-code semantics as a broken hash chain (exit 1).
+
+---
+
+## 12. Honeytokens (v0.3.0+)
+
+Deterministic decoys that no legitimate tool call should ever touch. When a honeytoken appears in a tool call's args (or as a phantom tool name), the runtime fires immediately. Zero false positives by construction: a hit means an agent has been probing.
+
+### 12.1 Honeytoken types
+
+- **Value tokens** — fixed strings or regex patterns. Matched against the canonical-JSON of `tool.args` recursively (any depth, any key).
+- **Phantom tools** — tool names that are never advertised. Any dispatch to that name fires immediately, regardless of args.
+
+### 12.2 Honeytoken set shape
+
+A consumer-supplied object:
+
+```ts
+{
+  id: string,                          // stable identifier for the set
+  description?: string,
+  tokens: Array<{
+    id: string,                        // recorded in audit
+    description?: string,
+    value?: string,                    // mutually exclusive with pattern
+    pattern?: RegExp                   // mutually exclusive with value
+  }>,
+  phantomTools?: string[]
+}
+```
+
+The library SHIPS NO DEFAULT TOKENS. A library shipping plausible-looking fake credentials gets picked up by secret scanners and creates support load. Consumers register their own.
+
+### 12.3 Hit behavior
+
+On any hit, the runtime MUST:
+
+1. Append `x_honeytoken_triggered` with status `halted` and detail describing the hit kind + token id (or tool name for phantom-tool hits):
+
+```jsonl
+{"kind":"x_honeytoken_triggered","status":"halted","initiator":"system","tool":{"name":"...","args":{...}},"detail":{"set_id":"...","hit_kind":"value_in_args|phantom_tool","token_id":"...","tool_name":"..."}}
+```
+
+2. Press the EStopLocal (if configured) with `reason: 'honeytoken:<token_id>'` or `'honeytoken:phantom_tool:<tool_name>'`.
+
+3. Throw a halt error to the caller. The dispatched function MUST NOT run.
+
+Phantom-tool match wins over value-in-args match when both would fire.
+
+---
+
+## 13. Capability tagging + tripwires (v0.3.0+)
+
+Every tool is tagged with one or more capability classes. The runtime maintains a per-session sliding window of recent tool calls + their capability sets. Rule sets describe suspicious combinations; when a combination is observed within `window_ms`, the rule fires.
+
+### 13.1 Canonical capability classes
+
+The canonical set, extensible by consumers:
+
+| Class | Meaning |
+|---|---|
+| `read` | Pure read of agent-accessible data. |
+| `write` | Local write of agent-accessible data. |
+| `delete` | Destruction of agent-accessible data. |
+| `execute` | Run a subprocess or arbitrary code. |
+| `network-egress` | Outbound network call. |
+| `network-ingress` | Accept inbound network call. |
+| `credential` | Read or write credentials. |
+| `system-path` | Touch OS-level paths (`/etc`, `~/.ssh`, etc.). |
+| `bulk` | Operation over many items. |
+| `unknown` | Fallback for untagged tools. Excluded from rule combinations unless a rule explicitly names `'unknown'`. |
+
+Consumers MAY register additional class strings.
+
+### 13.2 Rule shape
+
+```json
+{
+  "id": "exfil",
+  "description": "credential + outbound + write within 1 min",
+  "combination": ["credential", "network-egress", "write"],
+  "window_ms": 60000,
+  "level": "yellow"
+}
+```
+
+A rule matches when every class in `combination` has been observed within the last `window_ms`. A single tool tagged with multiple classes may satisfy several required slots at once.
+
+### 13.3 Yellow vs Red
+
+- `level: 'yellow'` (v0.3.0+) — append `x_capability_yellow`. **No dispatch behavior change.** Yellow exists to collect telemetry.
+- `level: 'red'` (v0.5.0+) — append `x_capability_redline` AND press the EStop. Red rules MUST NOT be deployed until corresponding Yellow telemetry has produced zero organic fires over a sustained window.
+
+### 13.4 Wire shape
+
+```jsonl
+{"kind":"x_capability_yellow","status":"approved","initiator":"system","tool":{"name":"...","args":{...}},"detail":{"rule_id":"...","combination":[...],"window_ms":N,"contributing_event_ids":[...],"tool_capabilities":[...]}}
+{"kind":"x_capability_redline","status":"approved","initiator":"system","tool":{"name":"...","args":{...}},"detail":{"rule_id":"...","combination":[...],"window_ms":N,"contributing_event_ids":[...],"tool_capabilities":[...]}}
+```
+
+### 13.5 Window semantics
+
+The window slides forward at every event. Events older than the longest rule's `window_ms` are dropped. An implementation MUST cap the window's memory footprint (default: 10000 events per session) to defend against runaway agents.
+
+Contributing event ids for a fire are returned in chronological order, deduped (a multi-class event that satisfies multiple slots appears once).
+
+---
+
+## 14. Per-capability rate limits (v0.3.0+)
+
+Token-bucket rate limiting keyed by capability class. A normal-workload session sees zero impact; exfil-shaped bursts hit the narrow buckets long before they hit the global rate.
+
+### 14.1 Default buckets
+
+| Class | Calls per second (default) |
+|---|---|
+| `read` | 50 |
+| `write` | 10 |
+| `delete` | 1 |
+| `execute` | 5 |
+| `network-egress` | 5 |
+| `network-ingress` | 50 |
+| `credential` | 2 |
+| `system-path` | 1 |
+| `bulk` | 2 |
+
+Implementations MUST allow per-class overrides. Untagged tools (`unknown`) fall through to a configurable default bucket (typical: the previous-implementation global rate; default 50/s).
+
+### 14.2 Multi-class dispatch
+
+A tool tagged with multiple classes consumes one token from EVERY relevant bucket. First denial wins; earlier-class tokens already consumed in the same call are NOT refunded (errs on the side of slowing the caller).
+
+### 14.3 Breach audit
+
+On a breach, the runtime MUST append `x_rate_limit_breached` once per burst (suppress duplicate breach rows until a subsequent call succeeds):
+
+```jsonl
+{"kind":"x_rate_limit_breached","status":"denied","initiator":"system","detail":{"tool":"...","class":"credential","retry_after_ms":N}}
+```
+
+---
+
+## 15. Two-key operator authorization (v0.4.0+)
+
+For tool dispatches that require fresh operator confirmation before proceeding (analogous to `sudo` for AI agents, or the Hub `password.confirm` gate for `panic_clear`), the runtime suspends the call, writes a `policy_check { status: pending_operator }` audit row with a unique `gate_id`, and calls the configured operator gate. Approved → proceed; denied → throw. Timeout is treated as denied (fail-closed).
+
+### 15.1 Audit record status `pending_operator`
+
+§2.2 is extended with a new `status` value: `pending_operator`. Implementations MUST accept this status when reading; writers SHOULD only emit it on `policy_check` records issued by the two-key flow.
+
+### 15.2 Request payload
+
+The runtime calls the gate with:
+
+```ts
+{
+  gate_id: string,                     // "gt_<ulid>"
+  tool_name: string,
+  tool_args: Record<string, unknown>,  // CALLER REDACTED, matches audit
+  reason: string,                      // free-text (rule_id, capability name, etc.)
+  timeout_ms: number,
+  agent_id: string,
+  session_id: string
+}
+```
+
+### 15.3 Response
+
+```ts
+{
+  decision: 'approved' | 'denied',
+  operator_id?: string,                // recorded in audit
+  reason?: string                      // recorded in audit; 'timeout' on synthesized timeout response
+}
+```
+
+### 15.4 Wire shape
+
+```jsonl
+{"kind":"policy_check","status":"pending_operator","initiator":"system","tool":{"name":"...","args":{...}},"detail":{"gate_id":"gt_...","timeout_ms":N,"reason":"..."}}
+{"kind":"policy_check","status":"approved","initiator":"operator","tool":{"name":"...","args":{...}},"detail":{"gate_id":"gt_...","operator_id":"...","reason":"..."}}
+{"kind":"policy_check","status":"denied","initiator":"operator","tool":{"name":"...","args":{...}},"detail":{"gate_id":"gt_...","reason":"timeout|operator_denied|..."}}
+```
+
+The pending row and the resolution row MUST share the same `gate_id`.
+
+### 15.5 Timeout
+
+Library-defined default: 5 minutes. Implementations MUST allow per-call and runtime-level overrides. On timeout, the library synthesizes a `{ decision: 'denied', reason: 'timeout' }` response and writes the denied audit row.
+
+### 15.6 Transport
+
+The library defines the suspend/resume contract. Consumers wire the actual transport — HTTP webhook, IPC frame to a UI process, LiveKit data channel, Hub-side `password.confirm` endpoint. Library-shipped reference adapters:
+
+- `callbackOperatorGate(fn)` — wraps a plain async callback.
+- `denyAllOperatorGate(reason)` — defensive fallback for CI / no-operator environments.
+
+---
+
+## 16. Dead-man's heartbeat (v0.4.0+)
+
+For long-running surfaces, the consumer (or its harness) must call `heartbeat()` every N seconds. Missed heartbeats trigger graduated responses.
+
+### 16.1 Configuration
+
+```ts
+{
+  softMs: number,                      // soft window
+  hardMs: number,                      // hard window (> softMs)
+  checkIntervalMs?: number             // default = clamp(softMs/4, 50, 5000)
+}
+```
+
+Implementations MUST reject `softMs <= 0` and `hardMs <= softMs` at construction.
+
+### 16.2 State machine
+
+`idle → softMissed → hardMissed`. Heartbeat resets to `idle` from `softMissed`. `hardMissed` is terminal — `heartbeat()` does NOT recover. Recovery requires constructing a new monitor (new session).
+
+### 16.3 Behavior on miss
+
+**Soft miss:** append `x_heartbeat_warning` with `status: approved` and `detail.level: 'soft'`. No EStop press. Dispatch continues.
+
+**Hard miss:** append `x_heartbeat_warning` with `status: halted` and `detail.level: 'hard'`, then press the EStop with `reason: 'heartbeat_missed'`. Stop monitoring (session is halted).
+
+### 16.4 Opt-in requirement
+
+Heartbeat MUST be OFF by default at the runtime level. A surface that does not wire `heartbeat()` into its main loop MUST NOT enable it — that's a guaranteed day-1 false E-stop.
+
+---
+
+## 17. Behavioral baselines (offline, v0.5.0+)
+
+Descriptive statistics on audit-record streams, produced and consumed by the offline `guardian-baseline` CLI. **The supervisor MUST NOT consult baselines in the hot path.** Baselines are reports for operator review, not runtime tripwires.
+
+### 17.1 Profile shape
+
+Per `agent_id`, version `v=1`:
+
+```ts
+{
+  agent_id: string,
+  v: '1',
+  session_count: number,
+  total_records: number,
+  tool_call_count: number,
+  avg_session_length_events: number,
+  stddev_session_length_events: number,
+  avg_session_duration_ms: number,
+  stddev_session_duration_ms: number,
+  tool_frequency: Record<string, number>,
+  hour_of_day: number[24],             // counts per UTC hour
+  kind_frequency: Record<string, number>,
+  status_frequency: Record<string, number>,
+  first_ts: string | null,
+  last_ts: string | null,
+  generated_at: string
+}
+```
+
+### 17.2 Storage
+
+`~/.flowdot/audit/baselines/<agent_id>.json` (configurable via `FLOWDOT_BASELINES_DIR`). Mode `0o600`. Filename derived from `agent_id` with shell-unsafe characters replaced by `_`.
+
+### 17.3 Deviation reporting
+
+`compareToBaseline(candidate, baseline, { sigmaThreshold, minBaselineSessions })` returns a list of metrics that deviated above `sigmaThreshold` σ (default 3). When the baseline σ is 0 (degenerate), any non-equal observation is reported with `sigma: null`. Tools present in candidate but absent in baseline are flagged.
+
+The deviation report is descriptive output. **No audit row is written.** The operator decides what to do.
+
+---
+
+## 18. Cross-surface correlation (offline, v0.5.0+)
+
+The offline `guardian-correlator` CLI reads audit logs from multiple sources for the same `agent_id` and reports patterns that span surfaces:
+
+### 18.1 Match types
+
+| Match type | Predicate |
+|---|---|
+| `overlapping_sessions` | Two sessions, different surfaces, same agent_id, with intersecting time windows. |
+| `args_hash_collision` | Identical canonical-JSON SHA256 of `tool.args` for the same `tool_name` on two different surfaces within `argsHashWindowMs` (default 60s). |
+| `sequence_similarity` | Cosine similarity of per-session tool-frequency vectors ≥ threshold (default 0.9) AND start times within `similarityWindowMs` (default 10 min) AND each session has ≥ `similarityMinCalls` tool calls (default 5). |
+
+### 18.2 Output
+
+Findings are written as JSONL rows with `kind: 'x_cross_surface_match'` to a separate log (default `~/.flowdot/audit/correlations.jsonl`). The correlator MUST NOT mutate source audit files.
+
+```jsonl
+{"ts":"...","kind":"x_cross_surface_match","agent_id":"...","match_type":"overlapping_sessions|args_hash_collision|sequence_similarity","surfaces":["cli","mcp"],"session_ids":["...","..."],"detail":{...}}
+```
+
+### 18.3 Operator workflow
+
+Correlation reports are read by hand or piped into the operator's review tooling. The matcher does not signal back into runtimes; if a correlation justifies a halt, the operator presses PANIC.
+
+---
+
+## Open questions (rolling)
 
 1. **Distributed audit logs** — how do multiple runtime instances coordinate a single hash chain? Likely answer: per-instance chains plus a coordinator that joins them.
-2. **Argument redaction** — schema-driven `*_hash` placeholders for PII fields.
-3. **Replay verification CLI** — `guardian-verify <file.jsonl>`.
-4. **Model-aware policy rules** — `when: { model.provider: "anthropic", model.id: "claude-*-4.5*" }` extension to §3.
+2. **Argument redaction** — schema-driven `*_hash` placeholders for PII fields (currently pattern-based per surface).
+3. **Red-line auto-stop calibration** — formal criteria for promoting a Yellow rule to Red. Current rule of thumb: zero organic fires in negative corpus + ≥ one surface release with zero Yellow fires for that combination.
+
+**Resolved in v0.3+:**
+- ~~Replay verification CLI~~ → `guardian-verify` shipped.
+- ~~Model-aware policy rules~~ → `PolicyWhen.attribution_path` + glob matcher shipped (v0.7).
 
 ---
 

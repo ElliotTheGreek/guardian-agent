@@ -2,7 +2,9 @@
 
 > A runtime supervisor for tool-using LLM agents. Audit log, tool-permission scoping, human-in-the-loop approval gates, and an emergency-stop primitive — as a small, dependency-light Python library that wraps any agent's tool-call loop.
 
-**Status**: pre-alpha · spec v0.1.0 · interface unstable · not yet on PyPI
+**Status**: pre-alpha · tracks SPEC v0.5 · Python port to TypeScript parity in progress · not yet on PyPI
+
+> **For evaluators / reviewers**: this Python implementation is currently a spec-first stub being brought up to parity with the TypeScript reference implementation at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts), which has shipped through the v0.10 milestone (full v0.1–v0.10 feature set, 535 tests, 100% line+branch+function coverage). The two implementations share a single canonical [SPEC](./SPEC.md); see [§ Project status & roadmap](#project-status--roadmap) for the path to parity.
 
 ---
 
@@ -97,9 +99,9 @@ If you want any of the above, the upstream project — [FlowDot](https://flowdot
 
 `guardian-agent` exists to make three things possible that are currently impossible without rebuilding from scratch:
 
-1. **A shared spec for what "supervisor layer" means.** Right now every closed product claims it has one. There's no way to compare them, no way to evaluate them, no way for a regulator to point at "the standard." The [SPEC](./SPEC.md) is language-neutral — Python is the reference implementation; conforming implementations in TypeScript, Go, or Rust are welcome.
+1. **A shared spec for what "supervisor layer" means.** Right now every closed product claims it has one. There's no way to compare them, no way to evaluate them, no way for a regulator to point at "the standard." The [SPEC](./SPEC.md) is language-neutral. The TypeScript reference implementation ([`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts)) is currently ahead of this Python implementation; this repo is being brought to parity, after which a cross-language conformance suite will exercise both against the same SPEC. Implementations in other languages (Go, Rust) are welcome.
 2. **A reference implementation that a third party can adopt without depending on a private vendor.** Trust infrastructure that ships only inside a proprietary platform is not trust infrastructure; it's vendor lock-in.
-3. **An eval substrate** — the companion eval harness (coming v0.4) measures gate-bypass surface, audit-log completeness, blast radius on tool misuse. Any agent wrapped with a conforming runtime — in any language — can be measured against any other, because the audit log format and gate protocol are shared across implementations.
+3. **An eval substrate** — a companion eval harness (`guardian-eval`, planned) measures gate-bypass surface, audit-log completeness, blast radius on tool misuse. Any agent wrapped with a conforming runtime — in any language — can be measured against any other, because the audit log format and gate protocol are shared across implementations.
 
 ## Why open source — and why AGPL
 
@@ -109,22 +111,22 @@ For organizations that need a non-copyleft license for internal use, **commercia
 
 ## Project status & roadmap
 
-This repo is currently a spec-first stub. The order of work:
+This Python repo is currently a spec-first stub. The TypeScript reference at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts) has already implemented v0.1–v0.10 (full trust foundation + runtime safety layer + offline analysis tools) with 535 tests at 100% line+branch+function coverage. The Python port path is to catch up to TS parity milestone by milestone:
 
 - **v0.1.0** *(now)* — SPEC + audit-log record format + minimal Python reference impl of audit log only. No signatures yet.
-- **v0.2.0** — Tool-permission scoping (policy YAML, wildcard matching, enforcement).
-- **v0.3.0** — HITL approval gate (sync CLI, async callback, programmatic).
-- **v0.4.0** — Emergency-stop primitive (signal handlers, API, halt semantics). `guardian-eval` companion package.
-- **v0.5.0** — Hash-chained + ed25519-signed audit logs. Replay verification CLI.
-- **v1.0.0** — Stable API; pluggable storage backends; first public red-team study published.
+- **v0.2.0** — Tool-permission scoping (policy YAML, wildcard matching, enforcement). Matches SPEC §3.
+- **v0.3.0** — HITL approval gate (sync CLI, async callback, programmatic). Matches SPEC §4. External chain attestation, honeytokens, capability tags, per-capability rate limits brought to TS parity. Matches SPEC §11–§14.
+- **v0.4.0** — Emergency-stop primitive (signal handlers, API, halt semantics). Two-key operator authorization, dead-man's heartbeat. Matches SPEC §5 + §15 + §16.
+- **v0.5.0** — Hash-chained + ed25519-signed audit logs. Replay verification CLI. Offline behavioral baselines + cross-surface correlation. Matches SPEC §2 + §17 + §18.
+- **v1.0.0** — Cross-language conformance suite passing on both Python and TypeScript implementations. Stable API. Pluggable storage backends. First public red-team study published.
 
-Full plan: [ROADMAP.md](./ROADMAP.md).
+Full plan: [ROADMAP.md](./ROADMAP.md). Canonical spec: [SPEC.md](./SPEC.md).
 
 ## Funding & affiliation
 
 `guardian-agent` is funded as a public-goods deliverable. FlowDot LLC (NY, founded 2025) is the upstream maintainer.
 
-FlowDot's commercial platform is built on a TypeScript runtime that is an **independent conforming implementation** of the [SPEC](./SPEC.md): it emits the same JSONL audit-log format, consumes the same `permissions.yaml`, speaks the same gate protocol, and honors the same emergency-stop semantics. The Python reference implementation in this repository serves the Python-centric agent and evaluation ecosystem (LangChain, AutoGen, MCP Python clients, research labs). The TypeScript implementation serves Node-shaped production runtimes. The two share a contract, not code. A TypeScript reference companion package, [`@flowdot-llc/guardian-agent`](https://github.com/flowdot-llc/guardian-agent-ts), is on the public roadmap.
+FlowDot's commercial platform is built on a TypeScript runtime that is an **independent conforming implementation** of the [SPEC](./SPEC.md): it emits the same JSONL audit-log format, consumes the same `permissions.yaml`, speaks the same gate protocol, and honors the same emergency-stop semantics. The Python reference implementation in this repository targets the Python-centric agent and evaluation ecosystem (LangChain, AutoGen, MCP Python clients, research labs). The TypeScript implementation serves Node-shaped production runtimes. The two share a contract, not code. The TypeScript reference companion package is public at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts) and currently leads this Python implementation in completed milestones.
 
 Grant support is being sought from:
 - [Foresight Institute AI for Science & Safety Nodes](https://foresight.org/grants/grants-ai-for-science-safety/)
@@ -149,7 +151,8 @@ If you use `guardian-agent` in research, please cite:
 
 ```
 Mousseau, E. (2026). guardian-agent: A runtime supervisor for tool-using LLM
-agents. v0.1.0. https://github.com/flowdot/guardian-agent
+agents (Python reference implementation). v0.1.0.
+https://github.com/flowdot-llc/guardian-agent
 ```
 
 ---
