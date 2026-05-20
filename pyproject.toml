@@ -39,12 +39,10 @@ classifiers = [
 dependencies = [
     "pyyaml>=6.0",
     "python-ulid>=2.0",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]
-signatures = [
-    "cryptography>=42.0",
-]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",

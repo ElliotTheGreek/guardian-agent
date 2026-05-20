@@ -6,9 +6,12 @@ import json
 from pathlib import Path
 from typing import Iterator
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from ..errors import GuardianIntegrityError
 from ..types import AuditRecord
 from .chain import GENESIS_HASH, compute_record_hash
+from .signature import verify_record
 
 
 class AuditLogReader:
@@ -40,5 +43,22 @@ class AuditLogReader:
                     f"expected prev_hash={expected_prev}, got {record.get('prev_hash')}",
                 )
             expected_prev = compute_record_hash(record)
+            count += 1
+        return count
+
+    def verify_signatures(self, public_key: Ed25519PublicKey) -> int:
+        """Verify every record's ed25519 signature. Returns count verified.
+
+        Raises GuardianIntegrityError on the first record whose signature is
+        missing, malformed, or does not match its canonical bytes under the
+        given public key.
+        """
+        count = 0
+        for record in self.records():
+            if not verify_record(record, public_key):
+                raise GuardianIntegrityError(
+                    f"audit log signature invalid at record {count + 1}",
+                    f"event_id={record.get('event_id')}",
+                )
             count += 1
         return count

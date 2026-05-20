@@ -20,8 +20,11 @@ except ImportError:  # pragma: no cover — ulid is in pyproject deps
     def _ulid() -> str:
         return uuid.uuid4().hex.upper()
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from ..types import SPEC_VERSION, AuditRecord, AuditRecordInput
 from .chain import GENESIS_HASH, canonical_json_string, compute_record_hash
+from .signature import sign_record
 
 
 @dataclass
@@ -32,6 +35,8 @@ class AuditLogWriterOptions:
     agent_id: str
     session_id: str
     file_mode: int = 0o600
+    sign_with: Ed25519PrivateKey | None = None
+    """ed25519 private key. When set, every record is signed. SPEC §2.6."""
 
 
 class AuditLogWriter:
@@ -46,6 +51,7 @@ class AuditLogWriter:
         self.agent_id = options.agent_id
         self.session_id = options.session_id
         self._file_mode = options.file_mode
+        self._sign_with = options.sign_with
         self._lock = threading.Lock()
         self._tip_hash: str = GENESIS_HASH
         self._handle: Optional[object] = None
@@ -115,9 +121,11 @@ class AuditLogWriter:
             record["model"] = input_record["model"]
         if "detail" in input_record:
             record["detail"] = input_record["detail"]
-        # signature field is included as None for the wire shape; canonicalize
-        # strips it before hashing.
+        # Sign or write `signature: null` per SPEC §2.6. canonicalize_for_hash
+        # strips the field before hashing/signing so either state is safe.
         record["signature"] = None
+        if self._sign_with is not None:
+            record["signature"] = sign_record(record, self._sign_with)
 
         line = canonical_json_string(record) + "\n"
         assert self._handle is not None  # narrowing for type checker
