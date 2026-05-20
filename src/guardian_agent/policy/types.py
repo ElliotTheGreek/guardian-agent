@@ -12,10 +12,16 @@ PolicyMatchedAt = Literal["exact", "wildcard", "category", "default"]
 
 @dataclass
 class PolicyWhen:
-    """Conditional clause; rule only matches when these model attrs match."""
+    """Conditional clause; rule only matches when these model attrs match.
+
+    `attribution_path` (v0.7+) is a flat-glob pattern tested against the
+    rendered 4-segment path `<surface>/<aggregator>/<provider>/<id>`. Missing
+    segments render as `*`. See `policy/attribution.py`.
+    """
 
     model_provider: str | None = None
     model_id: str | None = None
+    attribution_path: str | None = None
 
 
 @dataclass

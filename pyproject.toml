@@ -50,6 +50,11 @@ dev = [
     "mypy>=1.10",
 ]
 
+[project.scripts]
+guardian-verify = "guardian_agent.cli.guardian_verify:main"
+guardian-baseline = "guardian_agent.cli.guardian_baseline:main"
+guardian-correlator = "guardian_agent.cli.guardian_correlator:main"
+
 [project.urls]
 Homepage = "https://github.com/flowdot/guardian-agent"
 Repository = "https://github.com/flowdot/guardian-agent"

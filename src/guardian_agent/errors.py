@@ -30,3 +30,26 @@ class GuardianIntegrityError(Exception):
     def __init__(self, message: str, detail: str | None = None) -> None:
         super().__init__(message)
         self.detail = detail
+
+
+class PolicyDenialError(Exception):
+    """Raised when the configured PolicyGate denied (or an operator denied a
+    policy-prompt). SPEC §3 (v0.2+). Carries the composite policy identifier
+    so callers can render structured errors without parsing strings.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        category: str | None = None,
+        identifier: str | None = None,
+        policy_identifier: str | None = None,
+        scope: str | None = None,
+        rule_tool: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.identifier = identifier
+        self.policy_identifier = policy_identifier
+        self.scope = scope
+        self.rule_tool = rule_tool

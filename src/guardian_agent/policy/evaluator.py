@@ -8,6 +8,7 @@ from __future__ import annotations
 import fnmatch
 
 from ..types import ModelAttribution
+from .attribution import match_attribution_path
 from .types import Policy, PolicyEvaluation, PolicyRule, PolicyScope
 
 
@@ -110,6 +111,11 @@ def _when_matches(rule: PolicyRule, model: ModelAttribution | None) -> bool:
         if model is None:
             return False
         if not glob_match(rule.when.model_id, model.id):
+            return False
+    if rule.when.attribution_path is not None:
+        if model is None:
+            return False
+        if not match_attribution_path(rule.when.attribution_path, model):
             return False
     return True
 
