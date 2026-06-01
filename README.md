@@ -6,6 +6,8 @@
 
 > **For evaluators / reviewers**: this Python implementation is currently a spec-first stub being brought up to parity with the TypeScript reference implementation at [`flowdot-llc/guardian-agent-ts`](https://github.com/flowdot-llc/guardian-agent-ts), which has shipped through the v0.10 milestone (full v0.1–v0.10 feature set, 539 tests, 100% line+branch+function coverage). The two implementations share a single canonical [SPEC](./SPEC.md); see [§ Project status & roadmap](#project-status--roadmap) for the path to parity.
 
+![guardian-agent wraps every tool call: the agent's call passes through a policy check, a human-in-the-loop approval gate, the tool itself, and an append-only hash-chained audit log, all inside the GuardianRuntime, with an emergency stop that can halt the loop mid-execution](./docs/diagrams/supervised-tool-call-loop.jpg)
+
 ---
 
 ## The problem
@@ -19,6 +21,8 @@ There is no public reference implementation a regulated-industry deployer or eva
 ## The primitives
 
 The [SPEC](./SPEC.md) covers two concentric layers. The foundation primitives (this section) are the minimum useful supervisor. The runtime-safety layer ([SPEC §11–§16](./SPEC.md)) layers on top and is already implemented in the TypeScript reference; Python implementations land progressively per the roadmap below.
+
+![Three concentric layers: foundation primitives at the core (audit log, tool-permission scoping, HITL approval gate, emergency-stop), the runtime-safety layer around it (chain attestation, honeytokens, capability tripwires, per-capability rate limits, two-key operator auth, dead-man's heartbeat), and offline analysis on the outside (behavioral baselines, cross-surface correlation), all defined by one canonical spec with Python and TypeScript reference implementations](./docs/diagrams/concentric-layers.jpg)
 
 **Foundation primitives** (SPEC §2–§5):
 

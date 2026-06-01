@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "guardian-agent"
-version = "0.1.0"
-description = "A runtime supervisor for tool-using LLM agents: audit log, tool-permission scoping, HITL approval gates, and emergency-stop."
+version = "0.2.0"
+description = "A runtime supervisor for tool-using LLM agents: audit log + ed25519 signatures, tool-permission policy, HITL approval gates, emergency-stop, honeytokens, capability tripwires, per-class rate limits, two-key operator gate, dead-man's heartbeat, external chain attestation, and offline analysis CLIs."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -56,14 +56,50 @@ guardian-baseline = "guardian_agent.cli.guardian_baseline:main"
 guardian-correlator = "guardian_agent.cli.guardian_correlator:main"
 
 [project.urls]
-Homepage = "https://github.com/flowdot/guardian-agent"
-Repository = "https://github.com/flowdot/guardian-agent"
-Documentation = "https://github.com/flowdot/guardian-agent/blob/main/SPEC.md"
-Issues = "https://github.com/flowdot/guardian-agent/issues"
+Homepage = "https://github.com/flowdot-llc/guardian-agent"
+Repository = "https://github.com/flowdot-llc/guardian-agent"
+Documentation = "https://github.com/flowdot-llc/guardian-agent/blob/main/SPEC.md"
+Issues = "https://github.com/flowdot-llc/guardian-agent/issues"
+Changelog = "https://github.com/flowdot-llc/guardian-agent/blob/main/CHANGELOG.md"
 Upstream = "https://flowdot.ai"
+
+[tool.hatch.build]
+exclude = [
+    "tests/",
+    "tests/**",
+    "**/__pycache__/",
+    "**/*.pyc",
+    "**/*.pyo",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    ".mypy_cache/",
+    ".github/",
+    "scripts/",
+    "examples/",
+    ".gitignore",
+    ".env*",
+    "*.log",
+    ".DS_Store",
+    "Thumbs.db",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/guardian_agent"]
+
+[tool.hatch.build.targets.sdist]
+# Explicit allowlist — hatchling's default sdist includes everything VCS-tracked
+# minus its built-in exclusions, which leaks .gitignore and similar dev metadata.
+# Being explicit about what ships keeps the published tarball minimal.
+include = [
+    "src/guardian_agent/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SPEC.md",
+    "ROADMAP.md",
+    "pyproject.toml",
+]
 
 [tool.ruff]
 line-length = 100
